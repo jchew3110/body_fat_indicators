@@ -1,0 +1,546 @@
+---
+title: "Modelling Body Fat Percentage"
+subtitle: "DATA2902 Assignment 2"
+author: "Uni group"
+institute: "Sydney University"
+output:
+    xaringan::moon_reader:
+        css: [metropolis, metropolis-fonts, "assets/sydney.css"]
+        nature:
+            highlightStyle: github
+            highlightLines: true
+            countIncrementalSlides: false
+            ratio: '16:9'
+            navigation:
+                scroll: false
+---
+
+```{r chunk-opts, include=FALSE}
+knitr::opts_chunk$set(error = FALSE, echo=FALSE, message=FALSE, warning=FALSE, cache=FALSE)
+```
+
+```{r setup, cache=FALSE}
+# Libraries
+library(readr)
+library(janitor)
+library(dplyr)
+library(DT)
+library(ggplot2)
+library(plotly)
+library(tidyverse)
+library(equatiomatic)
+library(sjPlot)
+library(mplot)
+library(gridExtra)
+library(ggfortify)
+library(knitr)
+library(caret)
+library(reactable)
+library(reshape)
+
+# Setting seed
+set.seed(1)
+```
+
+class: inverse, center, middle
+
+# Is there an easy and accurate way to predict body fat?
+
+
+---
+
+background-image: url("assets/water2.jpg")
+background-size: 30%
+background-position: 75% 85%
+
+# The Data
+
+```{r data-import}
+data_orig <- read_tsv("bodyfat.tsv") %>% clean_names
+data <- data_orig
+
+data <- data[,c(2,1, 3:15)]
+
+sketch <- htmltools::withTags(table(
+  class='display',
+  thead(
+    tr(
+      th('Fat (%)'),
+      th('Density'),
+      th('Age'),
+      th('Height (cm)'),
+      th('Weight (kg)'),
+	  th(colspan=10, 'Circumferences (cm)'),
+    )
+  )
+))
+datatable(data, rownames=FALSE, class="cell-border stripe",
+          container=sketch,
+          options=list(pageLength=3,
+                       dom='it'))
+```
+
+
+*Ignore* Density:
+
++ Not easy to obtain
++ Siri's equation: $Fat=\frac{495}{Density}−450$
+
+```{r data-clean}
+data <- data %>% select(-underwater_density)
+```
+
+
+---
+
+class: inverse, center, middle
+
+# Let's try model body fat!
+
+
+---
+
+# Assumptions
+
+.pull-left[
+
+## Independence 
+
+## Linearity 
+
++ Height *isn't* linear with fat
++ Independence holds since each entry contains a unique male
+
+```{r linear-height, fig.height=4}
+data_nice <- data %>%
+    dplyr::rename(`Fat (%)` = body_fat_siri_equ,
+            Age = age,
+            `Height (cm)` = height,
+            `Weight (kg)` = weight_kg,
+            `Neck` = neck_circumf,
+            `Chest` = chest_circumf,
+            `Abdomen` = abdomen2circumf,
+            `Hip` = hip_circumf,
+            `Thigh` = thigh_circumf,
+            `Knee` = knee_circumf,
+            `Ankle` = ankle_circumf,
+            `Bicep` = extend_biceps_circumf,
+            `Forearm` = forearm_circumf,
+            `Wrist` = wrist_circumf
+    )
+
+ggplotly(
+    ggplot(data_nice) +
+    aes(x=`Height (cm)`, y=`Fat (%)`) +
+    geom_point(size=0.8, alpha=0.8) +
+    geom_smooth(method="lm")
+) %>%
+    config(displayModeBar=FALSE)
+
+data <- data %>% select(-height)
+data_nice <- data_nice %>% select(-`Height (cm)`)
+```
+]
+.pull-right[
+
+```{r linear-other}
+data_g <- data_nice %>%
+    gather(key="var", value="value", -`Fat (%)`)
+
+ggplotly(
+ggplot(data_g) +
+    aes(x=value, y=`Fat (%)`) +
+    facet_wrap(~var, ncol=4, scales="free_x") +
+    geom_point(size=0.5, alpha=0.7) +
+    geom_smooth(method="lm") +
+	theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+) %>%
+    config(displayModeBar=FALSE)
+```
+]
+
+---
+
+class: inverse, center, middle
+
+# How do we select the best model?
+
+---
+
+# Model Selection
+
+.pull-left[
+```{r, mplot-ida}
+#vis1 <- vis(mod1)
+#visf <- vis(modf)
+#visb <- vis(modb)
+#save(vis1, file="assets/vis-mod1.RData")
+#save(visf, file="assets/vis-modf.RData")
+#save(visb, file="assets/vis-modb.RData")
+load("assets/vis-mod1.RData")
+load("assets/vis-modf.RData")
+load("assets/vis-modb.RData")
+vip1 <- plot(vis1, which="vip",
+              interactive=TRUE, shiny = TRUE,
+              width=700, height=560)
+cat(vip1$html$chart, file="assets/vip1.html")
+```
+
+<iframe src = "assets/vip1.html" width = "810" height = "580" frameborder="0"></iframe>
+]
+
+.pull-right[
+
+```{r}
+boot1 <- plot(vis1, which="boot",
+              interactive=TRUE, shiny = TRUE,
+              width=700, height=560)
+cat(boot1$html$chart, file="assets/boot1.html")
+```
+
+<iframe src = "assets/boot1.html" width = "810" height = "580" frameborder="0"></iframe>
+]
+
+```{r mplot-models}
+data_nice <- data_nice %>%
+    dplyr::rename(Fat = `Fat (%)`,
+            Weight = `Weight (kg)`,
+    )
+
+#modm0 <- lm(Fat ~ Abdomen + Weight + Wrist, data_nice)
+modm1 <- lm(Fat ~ Abdomen + Weight + Wrist + Forearm, data_nice)
+modm2 <- lm(Fat ~ Abdomen + Weight + Wrist + Forearm + Thigh + Age, data_nice)
+
+```
+
+
+<!-- Let's consider the probability of including a certain variable as the full model becomes more sparse. Here the left plot displays this. As we can see abdomen circumference is a very important predictor. Weight, wrist circumference and forearm circumference are also crucial. -->
+
+<!-- On the right, we can examine the stability of models of certain size. The larger the circle the more stable it is. The y-axis represents the goodness of fit of each model to the training data. -->
+
+<!-- Let's consider, thus, the model at 5 parameters and 7, since they seem stable and are somewhat minimal. -->
+
+
+---
+
+# Model Selection
+
+.pull-center[
+
+```{r step, results='asis'}
+mod0 <- lm(Fat ~ 1, data_nice)
+mod1 <- lm(Fat ~ ., data_nice)
+
+modf <- step(mod1, scope=list(lower=mod0, upper=mod1),
+                   direction="forward", trace=FALSE)
+modb <- step(mod1, direction = "backward", trace=FALSE)
+
+#extract_eq(modf, use_coefs=TRUE, wrap=TRUE)
+#extract_eq(modb, use_coefs=TRUE, wrap=TRUE)
+
+tab_model(modf, modb,
+          #modm0,
+          modm1, modm2,
+    show.ci=FALSE, show.aic=FALSE, show.obs=FALSE, show.r2=FALSE,
+    digits=1, digits.p=2, p.style='stars',
+    dv.labels=c("Forwards Step", "Backwards Step",
+                #"Tiny",
+                "Small", "Medium"),
+    CSS=list(css.tdata='line-height: 25px; padding-left: 0.5cm; vertical-align: top;',
+             css.thead='+color: blue;',
+             css.firsttablerow='+padding-left: 0.5cm;',
+             css.summary = '+color: blue;')
+)
+
+
+```
+]
+
+
+<!-- Here are the selected models to study. We have the forwards and backwards step models, and the small and medium models as selected from the model stability plot. -->
+
+---
+
+# Assumptions
+
+.pull-left[
+
+.pull-center[
+## Homoskedacity 
+]
+
+```{r assump-homo, fig.height=6}
+homof <- autoplot(modf, which=1) + ggtitle("Forwards Step")
+homob <- autoplot(modb, which=1) + ggtitle("Backwards Step")
+#homom0 <- autoplot(modm0, which=1) + ggtitle("Forwards Model")
+homom1 <- autoplot(modm1, which=1) + ggtitle("Small Model")
+homom2 <- autoplot(modm2, which=1) + ggtitle("Medium Model")
+
+grid.arrange(homof@plots[[1]], homob@plots[[1]],
+             #homom0@plots[[1]],
+             homom1@plots[[1]],
+             homom2@plots[[1]],
+             nrow=2)
+```
+]
+
+.pull-right[
+
+.pull-center[
+## Normality 
+]
+
+```{r assump-norm, fig.height=6}
+normf <- autoplot(modf, which=2) + ggtitle("Forwards Step")
+normb <- autoplot(modb, which=2) + ggtitle("Backwards Step")
+#normm0 <- autoplot(modm0, which=2) + ggtitle("Forwards Model")
+normm1 <- autoplot(modm1, which=2) + ggtitle("Small Model")
+normm2 <- autoplot(modm2, which=2) + ggtitle("Medium Model")
+
+grid.arrange(normf@plots[[1]], normb@plots[[1]],
+             #normm0@plots[[1]],
+             normm1@plots[[1]],
+             normm2@plots[[1]],
+             nrow=2)
+
+
+```
+]
+
+Homoskedacity and normality assumptions are satisfied as shown.
+
+<!-- Homoskedacity is satisfied since there is equal spread above and below the x-axis. -->
+<!-- The assumption of normality is also satisfied since the QQ-plot is linear in shape. -->
+
+<!-- Yes, there are less observations to the right of 30% body fat but this is expected and the spread is still equal. -->
+
+
+
+
+---
+
+class: inverse, center, middle
+
+# Which model is best?
+
+
+---
+
+# Results
+```{css css-bold}
+.bold {
+    font-weight: bold;
+}
+
+```
+
+```{r results-table}
+trSet=trainControl(method="cv", number=10, verboseIter=FALSE)
+
+cv_f <- train(
+    Fat ~ Age + Weight + Neck + Chest + Abdomen + Hip + Thigh + Knee + Ankle + Bicep + Forearm + Wrist,
+    data_nice,
+    method="lm",
+    trControl=trSet
+)
+
+cv_b <- train(
+    Fat ~ Age + Weight + Neck + Abdomen + Hip + Thigh + Forearm + Wrist,
+    data_nice,
+    method="lm",
+    trControl=trSet
+)
+
+cv_m0 <- train(
+    Fat ~ Weight + Abdomen + Wrist,
+    data_nice,
+    method="lm",
+    trControl=trSet
+)
+
+cv_m1 <- train(
+    Fat ~ Weight + Abdomen + Forearm + Wrist,
+    data_nice,
+    method="lm",
+    trControl=trSet
+)
+
+cv_m2 <- train(
+    Fat ~ Age + Weight + Abdomen + Thigh + Forearm + Wrist,
+    data_nice,
+    method="lm",
+    trControl=trSet
+)
+
+results <- data.frame(Metric = c("Num Predictors",
+                                 "R²",
+                                 "R² Adjusted",
+                                 "AIC",
+                                 "BIC",
+                                 "RMSE",
+                                 "MAE")
+)
+
+mod_res <- list(list("Forwards", modf, cv_f),
+                list("Backwards", modb, cv_b),
+                #list("Tiny", modm0, cv_m0),
+                list("Small", modm1, cv_m1),
+                list("Medium", modm2, cv_m2))
+for (mod in mod_res) {
+    mod_sum <- summary(mod[[2]])
+    results[mod[[1]]] <- c(mod_sum$df[1],
+                           c(mod_sum$r.squared,
+                             mod_sum$adj.r.squared,
+                             mod_sum$r.squared,
+                             mod_sum$adj.r.squared,
+                             mod_sum$AIC,
+                             mod_sum$BIC,
+                             mod[[3]]$results$RMSE,
+                             mod[[3]]$results$MAE))
+}
+
+results <- as.data.frame(t(results))
+colnames(results) <- results[1,]
+results <- results[-1,]
+results$MAE <- results$MAE %>% as.numeric()
+results$RMSE <- results$RMSE %>% as.numeric()
+results$AIC <- results$AIC %>% as.numeric()
+results$BIC <- results$BIC %>% as.numeric()
+results$`R²` <- results$`R²` %>% as.numeric()
+results$`R² Adjusted` <- results$`R² Adjusted` %>% as.numeric()
+results$`Num Predictors` <- results$`Num Predictors` %>% as.integer()
+
+orange_pal <- function(x) rgb(colorRamp(c("#ffe4cc", "#ff9500"))(x), maxColorValue = 255)
+blue_pal <- function(x) rgb(colorRamp(c("#4DC9FF", "#4CD9D9"))(x), maxColorValue = 255)
+green_pal <- function(x) rgb(colorRamp(c("#8ED94C", "#4CD97B"))(x), maxColorValue = 255)
+
+reactable(results, bordered = TRUE, highlight = TRUE,
+          defaultColDef = colDef(format = colFormat(digits = 2)),
+          rowClass = function(index) {
+                  if (index %in% c(3, 4)) {
+                      "bold"
+              }
+            },
+          columns = list(
+             MAE = colDef(style = function(value) {
+                  normalized <- (value - min(results$MAE)) / (max(results$MAE) - min(results$MAE))
+                  color <- orange_pal(normalized)
+                  list(background = color)
+              }),
+             RMSE = colDef(style = function(value) {
+                  normalized <- (value - min(results$RMSE)) / (max(results$RMSE) - min(results$RMSE))
+                  color <- orange_pal(normalized)
+                  list(background = color)
+              }),
+             AIC = colDef(style = function(value) {
+                  normalized <- (value - min(results$AIC)) / (max(results$AIC) - min(results$AIC))
+                  color <- blue_pal(normalized)
+                  list(background = color)
+              }),
+             BIC = colDef(style = function(value) {
+                  normalized <- (value - min(results$BIC)) / (max(results$BIC) - min(results$BIC))
+                  color <- blue_pal(normalized)
+                  list(background = color)
+              }),
+             `R² Adjusted` = colDef(style = function(value) {
+                  normalized <- (value - min(results$`R² Adjusted`)) / (max(results$`R² Adjusted`) - min(results$`R² Adjusted`))
+                  color <- green_pal(normalized)
+                  list(background = color)
+              }),
+             `R²` = colDef(style = function(value) {
+                  normalized <- (value - min(results$`R²`)) / (max(results$`R²`) - min(results$`R²`))
+                  color <- green_pal(normalized)
+                  list(background = color)
+              }),
+              `Num Predictors` = colDef(format = colFormat(digits = NULL))
+          ))
+```
+
+```{r results-ci, fig.align='center', fig.height=4}
+
+res = resamples(list(`Forwards` = cv_f,
+                     `Backwards` = cv_b,
+                     #`Tiny` = cv_m0,
+                     `Small` = cv_m1,
+                     `Medium` = cv_m2))
+
+res_melt <- res$values %>% gather(key="Model", value="value")
+res_melt$value <- res_melt$value %>% as.numeric()
+
+res_melt_rmse <- res_melt[grepl("RMSE", res_melt$Model), ]
+res_melt_rmse$Metric <- rep("RMSE", nrow(res_melt_rmse))
+res_melt_rmse$Model <- res_melt_rmse$Model %>% as.factor()
+levels(res_melt_rmse$Model) <- c("Backwards", "Forwards", "Medium", "Small")
+
+res_melt_mae <- res_melt[grepl("MAE", res_melt$Model), ]
+res_melt_mae$Metric <- rep("MAE", nrow(res_melt_mae))
+res_melt_mae$Model <- res_melt_mae$Model %>% as.factor()
+levels(res_melt_mae$Model) <- c("Backwards", "Forwards", "Medium", "Small")
+
+res_melt <- rbind(res_melt_mae, res_melt_rmse)
+res_melt$Model <- res_melt$Model %>% as.factor()
+res_melt$Metric <- res_melt$Metric %>% as.factor()
+
+ggplot(res_melt) +
+    aes(x=value, y=Model, fill=Metric) +
+    geom_boxplot() +
+    labs(x="")
+
+
+```
+
+<!-- It appears that the in-sample performance of all models is very similar. This includes the R squared, AIC and BIC metrics. -->
+
+<!-- Using 10-fold cross validation, the root mean squared error and mean absolute error were obtained. These are measures of out of sample performance, with the MAE being less susceptible to outliers and thus more robust that the RMSE. -->
+
+<!-- The out of sample performance is more varied, so let's use it to compare model performance. The medium model seems to have the best average RMSE and MAE, followed by the backwards and small model which are close to one another. -->
+
+<!-- The distribution of the RMSE and MAE can be seen below in the grouped boxplot graph. Comparing the small and backwards step models, we can see that the small model is superior since it has a smaller variance and less outliers. -->
+
+<!-- The medium model still performs better than the small model with less error in general. -->
+
+<!-- The small model is however more convenient for use since it has 5 predictors rather than 7. -->
+
+
+
+---
+
+class: inverse, center, middle
+
+# What have we learnt?
+
+
+---
+
+# Discussion
+
+```{r disc}
+eq_m1 <- extract_eq(modm1, use_coefs=TRUE)
+eq_m2 <- extract_eq(modm2, use_coefs=TRUE)
+```
+
+## Best models 
+
+#### Home - Rounded small model
+
+$\text{Fat} = -35 + \text{Abdomen} - 0.3 (\text{Weight}) - 1.5(\text{Wrist}) + 0.5(\text{Forearm})$
+
+#### Accuracy - Medium model 
+
+$`r eq_m2`$
+
+
+The best models are the small and medium model. The small model with rounded coefficients is most convenient for use, whilst the medium model is most accurate.
+
+---
+
+class: inverse, center, middle
+
+# Take home message
+
+
+<!-- There is an easy and accurate model to predict your body fat. It requires on 4 measurements and you probably already know your weight. The other measurements are abdomen, wrist and forearm circumference which are not difficult to find using a tape measurer. -->
+
+<!-- There is also a more accurate model which uses thigh circumference and age but it's harder to recall. -->

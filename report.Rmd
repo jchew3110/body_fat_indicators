@@ -1,0 +1,293 @@
+---
+title: Report
+author: "uni group"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+css: report.css
+output:
+    html_document:
+        code_folding: hide
+        toc: true
+        toc_float: true
+        theme: journal #united lumen paper journal
+        highlight: tango #tango espresso haddock breezedark
+---
+
+```{r chunk-opts, include=FALSE}
+#knitr::opts_chunk$set(message=FALSE)
+```
+
+```{r setup}
+library(readr)
+library(skimr)
+library(janitor)
+library(dplyr)
+library(ggplot2)
+library(ggfortify)
+library(GGally)
+library(qtlcharts)
+library(broom)
+library(equatiomatic)
+library(caret)
+library(mplot)
+
+# Setting seed
+set.seed(1)
+```
+
+# Abstract
+
+# Introduction
+
+Body fat percentage is a popular way to assess an individual's health. However, accurate measurements are inconvenient and costly.
+
+Questions to answer
+
+- which variables are most important for accurately estimating body fat percentage when we:
+    - consider all variables
+    - consider only variables that individuals can generate themselves
+
+Note: we want to compare the performance of the following model:
+
+- the model without bodyweight density and the parameters that stay important as the model's goodness of fit decreases
+
+# Data description
+
+```{r data-import}
+data_orig <- read_tsv("bodyfat.tsv") %>% clean_names
+data <- data_orig
+```
+
+```{r ida}
+skim(data_orig)
+```
+
+The data set consists `r ncol(data_orig)` biometric measurements of `r nrow(data_orig)` different men aged `r min(data_orig$age)` to `r max(data_orig$age)`. It was collected in 1985 by the Human Performance Research Center at Brigham Young University in Utah using a central composite rotatable design sampling technique. The measurements recorded include age, height, weight, body density, body fat percentage and 10 circumferences.
+
+# Data cleaning
+
+Before undergoing the model selection process, underwater density should be removed from the dataset due to the following reasons:
+
+1. There is already an existing model for body fat percentage using body density known as Siri's equation:
+\[
+    PBF = \frac{495}{D} - 450
+\]
+where $PBF$ is the percentage of body fat and $D$ is body density.
+
+2. Body density obtained using hydrostatic weighing is an impractical process for individuals to undergo and would hinder any attempt at finding a useful model.
+
+```{r}
+data <- data %>% select(-underwater_density)
+```
+
+# Data exploration
+
+## Linearity
+
+Before constructing a linear regression model for body fat percentage, we should check that there is a linear relationship between any predictor and body fat percentage.
+
+```{r assump-linear-other}
+# Plot all combinations
+#ggpairs(data)
+iplotCorr(data)
+```
+Viewing the 2nd last row of plots, it is clear that there isn't a linear relationship between height and body fat percentage as expected, so let's remove height from the model selection process.
+
+```{r assump-linear-height}
+ggplot(data_orig) +
+    aes(x=height, y=body_fat_siri_equ) +
+    geom_point()
+# Remove height
+data = data %>% select(-height)
+```
+
+There are, however, linear relationships for ever remaining possible predictor and the percentage of body fat.
+
+## Independence
+
+All observations in the data set are mutually independent since each entry is the result of measuring a different unique male. This is a consequence of the experimental design.
+
+# Model selection
+
+## Forward-step
+
+```{r step-forward}
+# the model with no variables in it
+mod0 <- lm(body_fat_siri_equ ~ 1, data)
+# the model with all the variables
+mod1 <- lm(body_fat_siri_equ ~ ., data)
+mod_step_f <- step(mod1, scope = list(lower=mod0, upper=mod1),
+                   direction = "forward", trace = FALSE)
+summary(mod_step_f)$coef %>% round(3)
+```
+
+$`r extract_eq(mod_step_f, use_coefs = TRUE, wrap = TRUE)`$
+
+## Backward-step
+
+```{r step-backward}
+mod_step_b <- step(mod1, direction = "backward", trace = FALSE)
+summary(mod_step_b)$coef %>% round(3)
+```
+
+$`r extract_eq(mod_step_b, use_coefs = TRUE, wrap = TRUE)`$
+
+
+# Assumption checking
+
+## Homoskedasticity
+
+```{r}
+# homeskadsticity for forward-step
+p1 <-autoplot(mod_step_b, which=1)
+p2 <-autoplot(mod_step_f, which=1)
+p1 <- p1 + ggtitle("Forward step")
+p2 <- p2 + ggtitle("Backward step")
+gridExtra::grid.arrange(p1@plots[[1]], p2@plots[[1]], nrow=1)
+```
+
+## Normality
+```{r}
+p3 <-autoplot(mod_step_b, which=2)
+p4 <-autoplot(mod_step_f, which=2)
+p3 <- p3 + ggtitle("Forward step")
+p4 <- p4 + ggtitle("Backward step")
+gridExtra::grid.arrange(p3@plots[[1]], p4@plots[[1]], nrow=1)
+```
+
+# Analysis
+
+```{r, eval=FALSE}
+vis_step_b <- vis(mod_step_b)
+vis_step_f <- vis(mod_step_f)
+```
+
+First, we look at all the models using the loss versus dimension plot. This plot gives us an overview of how many models there are for each parameter and how much loss these models have. We want the models with the lowest loss.
+
+```{r, eval=FALSE}
+plot(vis_step_b, which="lvk") + ggtitle("Backward step: loss versus dimension")
+plot(vis_step_f, which="lvk") + ggtitle("Forward step: loss versus dimension")
+```
+In the plot above there are good models (below 1500) and poor models (above 1600). We will investigate which of the good models are best using another model stability plot that identifies the best model at each dimension.
+
+```{r, eval=FALSE}
+plot(vis_step_b, which = "boot", interactive = FALSE)
+plot(vis_step_f, which = "boot", interactive = FALSE)
+```
+
+In both the forward- and backward-step models, it appears there are two models that work well in th  4- and 5- parameter models. These models are:
+
+    body_fat_siri_equ ~ weight_kg + abdomen2circumf + forearm_circumf + wrist_circumf
+
+and,
+        body_fat_siri_equ ~ weight_kg + abdomen2circumf + forearm_circumf + wrist_circumf + hip_circumf + thigh_circumf + age + neck_circumf
+
+Which has the lowest error.
+
+Next, we look at how important the variables are when we increase the penalty. If the variables in the selected models are important, we expect the Bootstrapped probability to be relatively higher than the other variables as the penalty increases. We include a random variable as a baseline and decide that variables that have the same bootstrapped probability of the random variable are unimportant and can be excluded.
+
+
+
+If we look at a variable inclusion plot, we can see how important these variables become when we increase the penalty parameter. The penalty parameter essentially forces the model to be more selective, so only the most predictive variables are incldued.
+
+```{r, eval=FALSE}
+>>>>>>> e6631762676428523739f5d3f8f1bf94a58ca8c9
+vip_b <- plot(vis_step_b, which="vip", interactive = TRUE) + ggtitle("Backward step")
+vip_f <- plot(vis_step_f, which="vip", interactive = TRUE) + ggtitle("Forward step")
+```
+
+In both the forward-step and backward-step models, abdomen2circumf is important throughout. Weight_kg becomes more important as penalty increases. Wrist circumference is very important when penalty is low, but becomes less important as penalty incerases. Forearm cicumference is importand when penalty is low, but its importance decreases quickly as penalty increases. Chest circumference, ankle circumference, and and knee circumference have the same importantance as the random variable.
+
+The charts above contribute stronger evidence towards abdomen2circumf, weight_kg, and forarm_circumf being most important and ankle circumference, chest circumference, and knee circumference being least important. We will exclude the latter three variables from the 8-parameter model.
+
+
+# Final Models
+
+We have two models: the 4 parameter model and the 8 parameter model. The 4-parameter model is:
+
+    body_fat_siri_equ ~ weight_kg + abdomen2circumf + forearm_circumf + wrist_circumf
+
+And the 8-parameter model is:
+
+    body_fat_siri_equ ~ weight_kg + abdomen2circumf + forearm_circumf + wrist_circumf + hip_circumf + thigh_circumf + age + neck_circumf
+
+Next we will compare the performance of these two models.
+```{r}
+model_data <- data %>% select(c(body_fat_siri_equ, weight_kg, abdomen2circumf, forearm_circumf, wrist_circumf, hip_circumf,  thigh_circumf, age, neck_circumf))
+```
+
+
+
+# Compare sample performance
+
+
+## In-sample
+
+```{r perf-in}
+# 4-parameter model
+mod1 <- lm(body_fat_siri_equ ~ weight_kg + abdomen2circumf + forearm_circumf + wrist_circumf, model_data)
+# 8-parameter model
+mod2 <- lm(body_fat_siri_equ ~ weight_kg + abdomen2circumf + forearm_circumf + wrist_circumf + hip_circumf + thigh_circumf + age + neck_circumf, model_data)
+# get performance metrics for both models
+perform_f <- glance(mod_step_f) %>% round(3) %>% t()
+perform_b <- glance(mod_step_b) %>% round(3) %>% t()
+knitr::kable(perform_f)
+knitr::kable(perform_b)
+```
+For both models, the in-sample performance gives an adjusted R-squared value of approximately 0.75.
+
+
+## Out of sample
+
+### K-fold Cross Validation
+
+To compare the out-of-sample performance, we can look at the root mean square error (RMSE) (the difference between the predicted and the real values), the mean absolute error (MAE) (a measure more robust to outliers), and the R-squared (how close the data are to the fitted line produced by the model).
+
+```{r}
+# k-fold cv for first model (4 parameters)
+cv_1 = train(
+    body_fat_siri_equ ~ weight_kg + abdomen2circumf + forearm_circumf + wrist_circumf,
+    model_data,
+    method = "lm",
+    trControl = trainControl(
+    method = "cv", number = 10,
+    verboseIter = FALSE
+    )
+)
+# k-fold cv for second model (8 parameters)
+cv_2 = train(body_fat_siri_equ ~ weight_kg + abdomen2circumf + forearm_circumf + wrist_circumf + hip_circumf + thigh_circumf + age + neck_circumf ,
+    model_data,
+    method = "lm",
+    trControl = trainControl(
+    method = "cv", number = 10,
+    verboseIter = FALSE
+    )
+)
+# compile all the models
+results = resamples(list(model_1 = cv_1,
+                         model_2 = cv_2) )
+```
+
+The RMSE, MAE, and R-squared on the test data are 4.4, 0.74, and 3.6 for both models.
+
+However, if we plot the confidence intervals for these values, we can see the model with fewer parameters has a smaller confidence interval:
+
+```{r}
+# compare RMSE of all the models
+rmse_p <- ggplot(results, aes(metric = "RMSE"), labs(y = "RMSE") )
+rmse_p <- rmse_p + ggtitle("Root mean square error")
+mae_p <- ggplot(results, aes(metric = "MAE"), labs(y = "MAE"))
+mae_p <- mae_p + ggtitle("Mean square error")
+r_p <- ggplot(results, aes(metric = "R-squared"), labs(y = "R-squared"))
+r_p <- r_p + ggtitle("R-Squared")
+gridExtra::grid.arrange(rmse_p, mae_p, r_p, nrow=1)
+```
+
+
+
+# References
++ [2] K. W. Penrose, A.G. Nelson and A.G. Fisher,
++ “Generalized body composition prediction equation
++ for men using simple measurement techniques,”
++ FACSM, Human Performance Research Center,
++ Brigham Young University, “Medicine and Science in
++ Sports and Exercise, V17, No. 2, April 1985, p. 189.

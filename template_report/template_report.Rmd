@@ -1,0 +1,352 @@
+---
+title: Modelling Body Fat Conveniently and Accurately
+
+author:
+  - name: T09oc_ontime_1
+address:
+    address: The University of Sydney, Camperdown, NSW, 2006
+
+date_subtitle: A group project for the DATA2902 unit.
+
+keywords:
+  - Regression
+  - Body fat density
+  - Model selection
+
+papersize: letter
+fontsize: 9pt
+numbersections: true
+skip_final_break: true
+bibliography: pinp
+footer_contents: Modelling Body Fat Conveniently and Accurately
+output: pinp::pinp
+---
+
+```{r chunk-opts, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE, cache=FALSE)
+```
+
+```{r setup}
+# Loading required libraries
+library(readr)
+library(skimr)
+library(janitor)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(ggfortify)
+library(equatiomatic)
+library(caret)
+library(mplot)
+library(stargazer)
+library(gridExtra)
+library(reactable)
+library(sjPlot)
+library(ggfortify)
+
+# Setting seed
+set.seed(1)
+```
+```{r data-import}
+data_orig <- read_tsv("bodyfat.tsv") %>% clean_names
+data <- data_orig
+
+data_nice_units <- data %>%
+    dplyr::rename(`Fat (%)` = body_fat_siri_equ,
+            `Age (years)` = age,
+            `Weight (kg)` = weight_kg,
+            `Neck (cm)` = neck_circumf,
+            `Chest (cm)` = chest_circumf,
+            `Abdomen (cm)` = abdomen2circumf,
+            `Hip (cm)` = hip_circumf,
+            `Thigh (cm)` = thigh_circumf,
+            `Knee (cm)` = knee_circumf,
+            `Ankle (cm)` = ankle_circumf,
+            `Bicep (cm)` = extend_biceps_circumf,
+            `Forearm (cm)` = forearm_circumf,
+            `Wrist (cm)` = wrist_circumf,
+            `Underwater Density (gm/cm^3)` = underwater_density,
+            `Height (cm)` = height
+    )
+
+data_nice <- data %>%
+    dplyr::rename(`Fat` = body_fat_siri_equ,
+            `Age` = age,
+            `Weight` = weight_kg,
+            `Neck` = neck_circumf,
+            `Chest` = chest_circumf,
+            `Abdomen` = abdomen2circumf,
+            `Hip` = hip_circumf,
+            `Thigh` = thigh_circumf,
+            `Knee` = knee_circumf,
+            `Ankle` = ankle_circumf,
+            `Bicep` = extend_biceps_circumf,
+            `Forearm` = forearm_circumf,
+            `Wrist` = wrist_circumf,
+            `Underwater Density` = underwater_density,
+            `Height` = height
+    )
+
+```
+
+# Abstract
+Body fat percentage is a popular method of assessing an individual's health. However, accurate measurements are inconvenient and costly. Using a dataset collected in 1985, our group found two noteworthy models for predicting body fat percentage; one more accurate that the other and another more convenient. The more convenient uses four measurements: weight and the circumferences of the abdomen, wrist and forearm.
+
+# Introduction
+
+Body fat exists in two forms: essential body fat and storage body fat. Essential body fat is required for survival, whereas storage body fat is not. In high levels, storage body fat is a risk factor for various forms of disease, such as type two diabetes and cardiovascular disease. Knowing one's body fat percentage thus becomes important for maintaining one's health.
+
+Currently, one of the most accurate methods for measuring body fat is retrieving one's underwater density. The underwater density measurement is then used to estimate body fat percentage using Siri's equation:
+
+\[
+    PBF = \frac{495}{D} - 450
+\]
+where $PBF$ is the percentage of body fat and $D$ is body density in $g/cm^3$.
+
+Although relatively accurate, this method is both time consuming, costly, and impractical for most individuals. Several alternatives have been proposed, including weight, body mass index (BMI), and circumference measurements of specific anatomical regions that accumulate fat tissue. Although combining all these factors may give the most accurate estimate of an individual's body fat percentage, it is not the most practical: rather, a practical estimate should make use of a limited number of factors that most people can calculate in their own home. It is not yet clear from the literature which combination of factors -- if any -- result in both a practical and accurate estimate of an individual's body fat percentage.
+
+In this report, we aimed to answer the following question: is there an easy and accurate way to estimate one's body fat percentage?
+
+To answer this question, we designed a multiple linear regression models and assess them in terms of their practicality and performance. We compare the performance of our model against the body fat measure estimated by Siri's equation.
+
+# Data set
+
+The data set \citep{dataset1985} consists `r ncol(data_orig)` biometric measurements of `r nrow(data_orig)` different men aged `r min(data_orig$age)` to `r max(data_orig$age)`. It was collected in 1985 by the Human Performance Research Center at Brigham Young University in Utah using a central composite rotatable design sampling technique. This technique was chosen because it is relatively robust and unbiased. The measurements recorded include age, height, weight, body density, body fat percentage and 10 circumference measurements of different anatomical regions. Table \ref{ida:sum} shows summary statistics of the data set's variables.
+
+```{r ida}
+sum_data <- psych::describe(data_nice_units) %>%
+    as.data.frame() %>%
+    dplyr::select(.,"min","max", "mean") %>%
+    round(1)
+colnames(sum_data) <- c("Min", "Max", "Mean")
+
+```
+
+## Data cleaning
+
+As mentioned previously, a measure of underwater density is an impractical for most people to obtain. Since we are concerned with designing a convenient model, we chose to remove it from the set of predictors in our data set.
+
+```{r}
+data <- data %>% select(-underwater_density)
+data_nice <- data_nice %>% select(-`Underwater Density`)
+data_nice_units <- data_nice_units %>% select(-`Underwater Density (gm/cm^3)`)
+```
+
+# Analysis
+
+## Pre-Assumptions
+
+All predictors except height satisfied the linearity assumption (Figure \ref{lin:o}). Because height did not satisfy this assumption (Figure \ref{lin:h}), we removed it from our set of predictor variables. A second assumption we must consider is that all observations between groups and within groups are independent. Here, each observation in the data corresponds to a unique male. This is a derivative of the study design, notably the central composite rotatable sampling technique, and means that the independence assumption must hold.
+
+
+## Model Selection
+
+We used two methods for selecting viable models which estimate body fat percentage. The first is the stepwise model selection process, in which variables are removed from the full model or added from the null model iteratively according to whether which variables improve the model's accuracy score, as measured by the Akaike information criterion (AIC).
+
+```{r step, results="hide"}
+mod0 <- lm(Fat ~ 1, data_nice)
+mod1 <- lm(Fat ~ ., data_nice)
+modf <- step(mod1, scope=list(lower=mod0, upper=mod1),
+                   direction="forward", trace=FALSE)
+modb <- step(mod1, direction = "backward", trace=FALSE)
+```
+
+
+
+The variable inclusion plot visualises which variables are consistently included in the best model as the penalty parameter, $\lambda$, changes. It shows that abdomen, wrist, forearm and neck circumference, as well as weight and age, are stable contributors to the best models. The remaining variables appear to stay within the vicinity of the random variable labelled RV, which indicates they are of no predictive significance (Figure \ref{mplot:inc}).
+
+```{r, fig.cap="\\label{mplot:stab}  of every possible model as the number parameters change. The size of the circle indicates the probability of being selected as the best model.", fig.=5}
+
+modm1 <- lm(Fat ~ Abdomen + Weight + Wrist + Forearm, data_nice)
+modm2 <- lm(Fat ~ Abdomen + Weight + Wrist + Forearm + Thigh + Age, data_nice)
+```
+
+The model stability plot shows the probability that a model performs the highest out of all the models at a given parameter size. This is indicated by the bubble size, whilst the y-axis measures the degree of error attributed to a model. We decided to choose the two most probable models out of models of parameter size four and six, since they appear to be simple and well performing (Figure \ref{mplot:stab}). From now on, we refer to the four parameter and six parameter chosen models as the "small" and "medium" models respectively.
+
+Two other models obtained from the forwards and backwards step-wise selection procedures, alongside the coefficients for the small and medium models are shown in table \ref{tab:mod}.
+
+## Post-Assumptions
+
+For the four models obtained here, the homoscedasticity assumption is satisfied (Figure \ref{homo:assum}), whilst the Central Limit Theorem (CLT) and the sample size imply that the normality assumption isn't violated.
+
+# Results
+
+In considering the in-sample performance, measured using the R-squared and AIC, the four models performed similarly as they were trained to fit the sample. To compare the out-of-sample performance, we compared the root mean square error (RMSE) (the difference between the predicted and the real values), the mean absolute error (MAE) (a measure more robust to outliers).
+
+All models performed relatively similarly when comparing R-squared values, RMSE, and MAE (Table \ref{results}).
+
+
+```{r}
+trSet=trainControl(method="cv", number=10, verboseIter=FALSE)
+
+cv_f <- train(
+    Fat ~ Age + Weight + Neck + Chest + Abdomen + Hip + Thigh + Knee + Ankle + Bicep + Forearm + Wrist,
+    data_nice,
+    method="lm",
+    trControl=trSet
+)
+
+cv_b <- train(
+    Fat ~ Age + Weight + Neck + Abdomen + Hip + Thigh + Forearm + Wrist,
+    data_nice,
+    method="lm",
+    trControl=trSet
+)
+
+cv_m1 <- train(
+    Fat ~ Weight + Abdomen + Forearm + Wrist,
+    data_nice,
+    method="lm",
+    trControl=trSet
+)
+
+cv_m2 <- train(
+    Fat ~ Age + Weight + Abdomen + Thigh + Forearm + Wrist,
+    data_nice,
+    method="lm",
+    trControl=trSet
+)
+
+```
+
+# Discussion and Conclusion
+
+## Interpretation of coefficients
+
+Our results showed that the four models had similar in-sample and out-of-sample performance. The main differences in the models are the number of parameters included. In this respect, the four parameter model is selected as the final model because it is the simplest.
+
+The equation for the final model is,
+```{r equation, results = 'asis'}
+equatiomatic::extract_eq(modm1, wrap = TRUE, use_coefs = TRUE)
+```
+
+This equation predicts that a one percent increase in body fat percentage results in the following changes to the predictor variables:
+
+* A 10 millimeter increase in abdomen circumference
+* A 300 gram decrease in weight
+* A 15 millimeter decrease in wrist circumference
+* A 5 millimeter increase in forearm circumference
+
+Increases in abdomen circumference align with what we would expect for an increase in body fat percentage: men typically accumulate adipose tissue around their abdomen \citep{heitmann1991body}. Increases in forearm circumference have also been reported \citep{haffner1993obesity}. Interestingly, our model suggests that an increase in body fat percentage is also associated with a decrease in weight and wrist circumference. These results do not align with what has been reported in existing obesity literature \citep{haffner1993obesity}; \citep{heitmann1991body}. One possible explanation for this discrepency is that body fat percentage was overestimated for older participants in our study. The Siri equation, which is the estimate of body fat percentage used in this study, has been reported to over estimate body fat percentage for individuals above sixty years old \citep{guerra2010accuracy}. In our study cohort, fourteen percent of participants were aged above sixty. The overestimate of body fat that occurred for elderly participants would also explain the negative coefficients for wrist circumference and weight, because weight and bone density decrease with age.
+
+One opportunity for future work in this area would be to investigate which variables are most important and predictive of body fat percentage when body fat is estimated using a measure that does not overestimate for elderly individuals, such as dry electrode-based body fat estimation.
+
+To conclude, we set out to determine whether there is an easy and accurate way to estimate one's body fat percentage. We obtained a model that requires only four measurements and is reasonably accurate. One limitation of this study was that the body fat estimate used may have overestimated for elderly participants, subsequently affecting the coefficients in our model. Future work should investigate whether these coefficients change when we use a more accurate estimate of body fat percentage.
+
+# Appendix
+
+See overleaf figures and tables that could not be condensed into the executive summary.
+
+```{r}
+kableExtra::kable(sum_data, caption='\\label{ida:sum} \\textnormal{A table with summary statistics of the data set.}')
+```
+
+```{r linear-height, fig.height= 2, fig.cap='\\label{lin:h} A scatter plot with fitted linear model of body fat percentage versus height.'}
+ggplot(data_nice_units) +
+    aes(x=`Height (cm)`, y=`Fat (%)`) +
+    geom_point(size=0.8, alpha=0.8) +
+    geom_smooth(method="lm") +
+    theme(axis.title.x = element_text(size=8),
+          axis.title.y = element_text(size=8))
+
+# Remove height
+data = data %>% select(-height)
+data_nice <- data_nice %>% select(-`Height`)
+data_nice_units <- data_nice_units %>% select(-`Height (cm)`)
+```
+
+```{r linear-other, fig.cap='\\label{lin:o} A scatter plot for each predictor which observe a linear relationship with body fat.'}
+data_g <- data_nice %>%
+    gather(key="var", value="value", -`Fat`)
+
+ggplot(data_g) +
+    aes(x=value, y=`Fat`) +
+    facet_wrap(~var, ncol=4, scales="free_x") +
+    geom_point(size=0.5, alpha=0.7) +
+    geom_smooth(method="lm") +
+    theme(axis.title.x = element_text(size=8),
+          axis.title.y = element_text(size=8),
+          axis.text.x = element_text(size=5.5),
+          axis.text.y = element_text(size=5.5)) +
+    xlab('Measurement') +
+    ylab('Fat (%)')
+```
+
+```{r, fig.height=2.5, fig.cap="\\label{mplot:inc} Each variable's probability of inclusion in the best model as it's penalty varies."}
+#vis1 <- vis(mod1)
+#save(vis1, file="assets/vis-mod1.RData")
+load("assets/vis-mod1.RData")
+plot(vis1, which = "vip") +
+    theme(axis.title.x = element_text(size=8),
+          axis.title.y = element_text(size=8),
+          axis.text.x = element_text(size=5.5),
+          axis.text.y = element_text(size=5.5))
+```
+
+```{r, fig.cap="\\label{mplot:stab} Stability of every possible model as the number parameters change. The size of the circle indicates the probability of being selected as the best model.", fig.height=2.5}
+plot(vis1, which="boot") +
+    theme(axis.title.x = element_text(size=8),
+          axis.title.y = element_text(size=8),
+          axis.text.x = element_text(size=5.5),
+          axis.text.y = element_text(size=5.5),
+          legend.position = "bottom",
+	      legend.direction='vertical',
+          legend.title = element_text(size=5.5),
+          legend.text = element_text(size=5.5)) +
+    theme(legend.position="none") +
+	scale_y_continuous(limits = c(1430, 1485))
+
+modm1 <- lm(Fat ~ Abdomen + Weight + Wrist + Forearm, data_nice)
+modm2 <- lm(Fat ~ Abdomen + Weight + Wrist + Forearm + Thigh + Age, data_nice)
+```
+
+```{r, results='asis'}
+stargazer(modf, modb, modm1, modm2,
+          title="\\textnormal{Table summary of the four selected models.}",
+          label='tab:mod',
+          column.labels=c("Fowards Step","Backwards Step","Small", "Medium"),
+          single.row=TRUE,
+          header=FALSE,
+          digits=2,
+          report='vc*',
+          keep.stat=c('rsq','adj.rsq','aic')
+)
+```
+
+```{r assump-homo, fig.height=3, fig.cap="\\label{homo:assum} Residuals of each model against the fitted values. This a a check for homoscedasticity by checking for equal spread of the residuals."}
+homof <- autoplot(modf, which=1) + ggtitle("Forwards Step") +
+    theme(axis.title.x = element_text(size=8),
+          axis.title.y = element_text(size=8),
+          axis.text.x = element_text(size=5.5),
+          axis.text.y = element_text(size=5.5),
+          plot.title = element_text(size=9))
+homob <- autoplot(modb, which=1) + ggtitle("Backwards Step") +
+    theme(axis.title.x = element_text(size=8),
+          axis.title.y = element_text(size=8),
+          axis.text.x = element_text(size=5.5),
+          axis.text.y = element_text(size=5.5),
+          plot.title = element_text(size=9))
+homom1 <- autoplot(modm1, which=1) + ggtitle("Small Model") +
+    theme(axis.title.x = element_text(size=8),
+          axis.title.y = element_text(size=8),
+          axis.text.x = element_text(size=5.5),
+          axis.text.y = element_text(size=5.5),
+          plot.title = element_text(size=9))
+homom2 <- autoplot(modm2, which=1) + ggtitle("Medium Model") +
+    theme(axis.title.x = element_text(size=8),
+          axis.title.y = element_text(size=8),
+          axis.text.x = element_text(size=5.5),
+          axis.text.y = element_text(size=5.5),
+          plot.title = element_text(size=9))
+
+grid.arrange(homof@plots[[1]], homob@plots[[1]],
+             homom1@plots[[1]],
+             homom2@plots[[1]],
+             nrow=2)
+```
+
+\graphicspath{ {./} }
+\begin{figure}
+    \caption{\label{results} Table of the in-sample and out of sample results for each model.}
+    \includegraphics[scale=0.3]{results.png}
+\end{figure}
